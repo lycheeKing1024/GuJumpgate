@@ -10,11 +10,12 @@ const globalScope = {};
 new Function('self', `${gopayUtilsSource};`)(globalScope);
 const api = new Function('self', `${source}; return self.MultiPageBackgroundPlusCheckoutCreate;`)(globalScope);
 
-function createCheckoutContentHarness() {
+function createCheckoutContentHarness(options = {}) {
   const checkoutEvents = [];
   const attrs = new Map();
   let listener = null;
   const elements = [];
+  const markPaymentSelected = options.markPaymentSelected !== false;
 
   function createElement({ tagName = 'DIV', text = '', attrs: initialAttrs = {}, id = '', type = '', value = '' } = {}) {
     const attrMap = new Map(Object.entries(initialAttrs));
@@ -135,7 +136,7 @@ function createCheckoutContentHarness() {
       element.value = nextValue;
     },
     simulateClick(element) {
-      if (element === paymentButton) {
+      if (element === paymentButton && markPaymentSelected) {
         paymentButton.setAttribute('aria-selected', 'true');
       }
     },
@@ -460,6 +461,31 @@ test('Plus checkout content routes same-frame autocomplete query and suggestion 
     'click-subscribe',
   ]);
   assert.equal(checkoutEvents.some((event) => event.type === 'delay' && event.ms !== 2000), false);
+});
+
+test('Plus checkout content allows hosted PayPal mode to continue without standard selected marker', async () => {
+  const { send } = createCheckoutContentHarness({ markPaymentSelected: false });
+
+  const result = await send({
+    type: 'FILL_PLUS_BILLING_AND_SUBMIT',
+    source: 'test',
+    payload: {
+      hostedCheckoutMode: true,
+      paymentMethod: 'paypal',
+      fullName: 'Ada Lovelace',
+      addressSeed: {
+        skipAutocomplete: true,
+        fallback: {
+          address1: 'Unter den Linden',
+          city: 'Berlin',
+          region: 'Berlin',
+          postalCode: '10117',
+        },
+      },
+    },
+  });
+
+  assert.equal(result.ok, true);
 });
 
 test('GPC manual checkout injects Plus script before reading ChatGPT session token and sends X-API-Key', async () => {

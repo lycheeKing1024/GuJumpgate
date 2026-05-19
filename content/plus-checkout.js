@@ -717,8 +717,10 @@ async function createPlusCheckoutSession(options = {}) {
   };
 }
 
-async function selectPaymentMethod(method = PLUS_PAYMENT_METHOD_PAYPAL) {
+async function selectPaymentMethod(method = PLUS_PAYMENT_METHOD_PAYPAL, options = {}) {
   const config = getPaymentMethodConfig(method);
+  const relaxedActivation = Boolean(options.relaxedActivation);
+  const clickRepeats = relaxedActivation && config.id === PLUS_PAYMENT_METHOD_PAYPAL ? 2 : 1;
   let lastDiagnosticsAt = 0;
   const target = await waitUntil(() => {
     const currentTarget = findPaymentMethodTarget(config.id);
@@ -738,11 +740,21 @@ async function selectPaymentMethod(method = PLUS_PAYMENT_METHOD_PAYPAL) {
   });
   console.info(`[MultiPage:plus-checkout] ${config.label} target selected`, summarizeElementForDebug(target));
   await performOperationWithDelay({ stepKey: 'plus-checkout-billing', kind: 'select', label: 'select-payment-method' }, async () => {
-    simulateClick(target);
+    for (let attempt = 1; attempt <= clickRepeats; attempt += 1) {
+      simulateClick(target);
+      if (attempt < clickRepeats) {
+        await sleep(500);
+      }
+    }
   });
-  log(`Plus Checkout：已点击 ${config.label} 付款方式，正在确认选中状态。`);
+  log(`Plus Checkout：已点击 ${config.label} 付款方式，正在确认选中状态。${relaxedActivation ? '（hosted checkout 宽松模式）' : ''}`);
 
   if (!await waitForPaymentMethodActive(config.id)) {
+    if (relaxedActivation) {
+      writePaymentMethodDiagnostics(config.id, `点击 ${config.label} 后未观察到标准选中标记，hosted checkout 宽松模式继续执行`, 'warn');
+      log(`Plus Checkout：点击 ${config.label} 后未观察到标准选中标记，但当前为 hosted checkout 宽松模式，继续执行后续账单填写。`, 'warn');
+      return false;
+    }
     const diagnostics = writePaymentMethodDiagnostics(config.id, `点击 ${config.label} 后页面仍未进入 ${config.label} 账单表单`, 'error');
     throw new Error(`Plus Checkout：已尝试点击 ${config.label}，但页面未切换到 ${config.label} 表单。请提供控制台 ${config.label} diagnostics 结构。候选数量：${diagnostics.paymentCandidates.length}，银行卡字段仍可见：${diagnostics.cardFieldsVisible ? '是' : '否'}。`);
   }
@@ -1560,7 +1572,9 @@ async function humanLikeClick(el) {
 async function fillPlusBillingAndSubmit(payload = {}) {
   await waitForDocumentComplete();
   const paymentMethod = normalizePlusPaymentMethod(payload.paymentMethod);
-  await selectPaymentMethod(paymentMethod);
+  await selectPaymentMethod(paymentMethod, {
+    relaxedActivation: Boolean(payload.hostedCheckoutMode),
+  });
   const billingResult = await fillPlusBillingAddress(payload);
 
   if (payload.skipSubmit) {

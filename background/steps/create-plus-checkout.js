@@ -375,6 +375,7 @@
         type: 'FILL_PLUS_BILLING_AND_SUBMIT',
         source: 'background',
         payload: {
+          hostedCheckoutMode: true,
           paymentMethod: PLUS_PAYMENT_METHOD_PAYPAL,
           fullName: guestProfile.fullName,
           addressSeed: buildHostedCheckoutAddressSeed(guestProfile.address),
