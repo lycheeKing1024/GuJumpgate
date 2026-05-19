@@ -196,6 +196,97 @@ return { refillPayPalEmailInput, submitPayPalLogin };
   );
 }
 
+function loadHostedStageApi({ elements = [], locationOverride = {} } = {}) {
+  const document = {
+    documentElement: {},
+    getElementById(id) {
+      return elements.find((el) => el.id === id) || null;
+    },
+    querySelector(selector) {
+      if (selector === 'button[data-testid="consentButton"]') {
+        return elements.find((el) => el.tag === 'button' && el.attrs?.['data-testid'] === 'consentButton') || null;
+      }
+      return null;
+    },
+    querySelectorAll(selector) {
+      if (selector.includes('button') || selector.includes('[role="button"]')) {
+        return elements.filter((el) => el.tag === 'button' || el.attrs?.role === 'button');
+      }
+      return [];
+    },
+  };
+  const window = {
+    getComputedStyle(el) {
+      return el?.style || { display: 'block', visibility: 'visible', opacity: '1' };
+    },
+  };
+  const location = {
+    host: 'www.paypal.com',
+    pathname: '/checkoutweb/demo',
+    href: 'https://www.paypal.com/checkoutweb/demo',
+    ...locationOverride,
+  };
+
+  return new Function('document', 'window', 'location', `
+const PAYPAL_HOSTED_STAGE_OUTSIDE = 'outside_paypal';
+const PAYPAL_HOSTED_STAGE_LOGIN = 'pay_login';
+const PAYPAL_HOSTED_STAGE_GUEST_CHECKOUT = 'guest_checkout';
+const PAYPAL_HOSTED_STAGE_VERIFICATION = 'verification';
+const PAYPAL_HOSTED_STAGE_REVIEW = 'review_consent';
+const PAYPAL_HOSTED_STAGE_APPROVAL = 'approval';
+const PAYPAL_HOSTED_STAGE_UNKNOWN = 'unknown';
+${extractFunction('isVisibleElement')}
+${extractFunction('normalizeText')}
+${extractFunction('getActionText')}
+${extractFunction('getVisibleControls')}
+${extractFunction('isEnabledControl')}
+${extractFunction('findClickableByText')}
+${extractFunction('findApproveButton')}
+${extractFunction('getPayPalHostedPathname')}
+${extractFunction('isPayPalHostedLoginPage')}
+${extractFunction('isPayPalHostedGuestCheckoutPage')}
+${extractFunction('findHostedVerificationInputs')}
+${extractFunction('hasHostedVerificationInputs')}
+${extractFunction('findHostedReviewConsentButton')}
+${extractFunction('detectPayPalHostedCheckoutStage')}
+return {
+  detectPayPalHostedCheckoutStage,
+};
+`)(document, window, location);
+}
+
+function createHostedVerificationApi(overrides = {}) {
+  const bindings = {
+    PAYPAL_HOSTED_STAGE_VERIFICATION: 'verification',
+    findHostedVerificationInputs: () => [],
+    normalizeHostedVerificationCode: (value = '') => String(value || '').replace(/\\D+/g, '').slice(0, 6),
+    waitForDocumentComplete: async () => {},
+    performPayPalOperationWithDelay: async (_metadata, operation) => operation(),
+    fillInput: () => {},
+    ...overrides,
+  };
+
+  return new Function(
+    'PAYPAL_HOSTED_STAGE_VERIFICATION',
+    'findHostedVerificationInputs',
+    'normalizeHostedVerificationCode',
+    'waitForDocumentComplete',
+    'performPayPalOperationWithDelay',
+    'fillInput',
+    `
+${extractFunction('fillHostedVerificationCode')}
+return { fillHostedVerificationCode };
+`
+  )(
+    bindings.PAYPAL_HOSTED_STAGE_VERIFICATION,
+    bindings.findHostedVerificationInputs,
+    bindings.normalizeHostedVerificationCode,
+    bindings.waitForDocumentComplete,
+    bindings.performPayPalOperationWithDelay,
+    bindings.fillInput
+  );
+}
+
 test('PayPal email page ignores hidden pre-rendered password input', () => {
   const hiddenPanel = createElement({ attrs: { 'aria-hidden': 'true' } });
   const emailInput = createElement({
@@ -306,5 +397,56 @@ test('PayPal email submit refills a prefilled email before clicking next', async
     submitted: false,
     phase: 'email_submitted',
     awaiting: 'password_page',
+  });
+});
+
+test('PayPal hosted checkout stage detection prioritizes verification popup over checkout path', () => {
+  const verificationInputs = Array.from({ length: 6 }, (_, index) => createElement({
+    tag: 'input',
+    type: 'text',
+    id: `ci-ciBasic-${index}`,
+  }));
+  const api = loadHostedStageApi({
+    elements: verificationInputs,
+    locationOverride: {
+      pathname: '/checkoutweb/demo',
+      href: 'https://www.paypal.com/checkoutweb/demo',
+    },
+  });
+
+  assert.equal(api.detectPayPalHostedCheckoutStage(), 'verification');
+});
+
+test('PayPal hosted checkout verification filler writes six digits into split inputs', async () => {
+  const inputs = Array.from({ length: 6 }, (_, index) => createElement({
+    tag: 'input',
+    type: 'text',
+    id: `ci-ciBasic-${index}`,
+    value: '',
+  }));
+  const writes = [];
+  const api = createHostedVerificationApi({
+    findHostedVerificationInputs: () => inputs,
+    fillInput: (element, value) => {
+      writes.push({ id: element.id, value });
+      element.value = value;
+    },
+  });
+
+  const result = await api.fillHostedVerificationCode({
+    verificationCode: '123456',
+  });
+
+  assert.deepEqual(writes, [
+    { id: 'ci-ciBasic-0', value: '1' },
+    { id: 'ci-ciBasic-1', value: '2' },
+    { id: 'ci-ciBasic-2', value: '3' },
+    { id: 'ci-ciBasic-3', value: '4' },
+    { id: 'ci-ciBasic-4', value: '5' },
+    { id: 'ci-ciBasic-5', value: '6' },
+  ]);
+  assert.deepEqual(result, {
+    stage: 'verification',
+    codeSubmitted: true,
   });
 });
